@@ -1,0 +1,18 @@
+{
+  "name": "hypermediaclient",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Horace Gonzalez",
+  "license": "ISC",
+  "dependencies": {
+    "async": "^1.5.2",
+    "https": "^1.0.0",
+    "request": "^2.72.0",
+    "superagent": "^3.6.0",
+    "underscore": "^1.8.3"
+  }
+}
