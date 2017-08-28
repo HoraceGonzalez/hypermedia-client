@@ -43,6 +43,10 @@ var offering = client
     .from("query/offering?offering_id=4201408783290348")
     //.include(["order-info"]);
 
+// offering.resolveData (function(offering) {
+//     console.log(offering);
+// });
+
 // var offeringPhotos = offering.follow("offering-photos");
 // var offeringTabs = offering.follow("offering-tabs");
 // var orderInfo = offering.follow("order-info");
