@@ -99,7 +99,6 @@ function Finder(fn, req) {
             // if document hasn't been fetched yet, get the document and then pass it to all the callbacks in the waiting queue.
             if (self.waitingStack.length === 1) {
                 // get the document.
-                console.log('running: ')
                 fn.call(self, function (doc) {
                     self.doc = doc;
                     // got the document. Now give it to all who are waiting or it.
@@ -178,63 +177,59 @@ Finder.prototype = {
         });
     },
 
-    // A function that post a form/action on the document. Used for RPC style calls.
-    do: function (actionName, params, onprogress) {
+    // A function that post a form on the document. Used for RPC style calls.
+    do: function (formName, params, onprogress) {
+        var self = this;
         return Finder.bind(this, function (doc) {
-            // find the action based on the actionName param.
-            var action = null;
-            for (var i = 0; i < doc.actions.length; i++) {
-                if (doc.actions[i].Name === actionName) {
-                    action = doc.actions[i];
-                    break;
-                }
-            }
+            // find the form based on the formName param.
+            var forms = doc.forms || {};
+            var form = forms[formName];
 
             // Enumerate the fields from the form and sets the value from the supplied "params". If the param isn't
             // available, then use the field's default value.
-            var actionParams = {};
+            var formParams = {};
             var fileParams = {};
-            for (var fieldName in action.fields) {
-                var field = action.fields[fieldName];
-                if (field.type == 2) {
-                    fileParams[fieldName] = typeof params[fieldName] !== 'undefined' ? params[fieldName] : field.value;
-                } else {
-                    actionParams[fieldName] = typeof params[fieldName] !== 'undefined' ? params[fieldName] : field.value;
-                }
-            }
+            // for (var i in form.inputs) {
+            //     var field = form.inputs[i];
+            //     if (field.type == 2) {
+            //         fileParams[fieldName] = typeof params[fieldName] !== 'undefined' ? params[fieldName] : field.value;
+            //     } else {
+            //         formParams[fieldName] = typeof params[fieldName] !== 'undefined' ? params[fieldName] : field.value;
+            //     }
+            // }
 
-            // Parse the form action uri, which may contain a template.
-            var template = parseUri(action.href);
-            // Generate the form action uri from the template, substituting the actionParams for the template placeholders values.
-            var uri = expandUri(template, actionParams);
+            // Parse the form furl uri, which may contain a template.
+            var template = parseUri(form.action);
+            // Generate the form action uri from the template, substituting the form Params for the template placeholders values.
+            var uri = expandUri(template, formParams);
 
-            // Erase any actionParams that were present in the uri template. This ensures they're not posted twice.
+            // Erase any formParams that were present in the uri template. This ensures they're not posted twice.
             for (var i = 0; i < template.length; i++) {
                 var key = template[i].key;
                 if (key) {
-                    delete actionParams[key];
+                    delete formParams[key];
                 }
             }
 
             return new Finder(function (callback) {
                 var config = {
                     url: uri,
-                    method: action.method.method,
+                    method: form.method,
                     headers: { 'Accept': 'application/vnd.siren+json' },
                     files: fileParams
                 };
 
-                // used to determine if there are no actionParams.
+                // used to determine if there are no formParams.
                 var hasProps = false;
-                for (var prop in actionParams) {
+                for (var prop in formParams) {
                     hasProps = true;
                     break;
                 }
 
                 // Set the config data/params property depending on whether this is a get/delete or a post/put.
-                config[isGetorDelete.test(config.method) ? "params" : "data"] = hasProps ? actionParams : undefined;
+                config[isGetorDelete.test(config.method) ? "params" : "data"] = hasProps ? formParams : undefined;
 
-                hasFiles = false;
+                var hasFiles = false;
                 for (var prop in config.files) {
                     hasFiles = true;
                     break;
@@ -245,9 +240,9 @@ Finder.prototype = {
                         // something nasty happened;
                     });
                 } else {
-                    http(config).success(callback);
+                    this.req(config, callback);
                 }
-            });
+            }, self.req);
         });
     },
 
