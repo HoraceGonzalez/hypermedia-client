@@ -1,7 +1,7 @@
 'use strict';
 
-var isGetorDelete = new RegExp('(get|delete)', 'i');
-var braceRegex = new RegExp('\{(.*?)\}', 'gi');
+let isGetorDelete = new RegExp('(get|delete)', 'i');
+let braceRegex = new RegExp('\{(.*?)\}', 'gi');
 
 // TODO: Put this in a service
 function parseUri(uri) {
@@ -46,15 +46,10 @@ function expandUri(template, params) {
 }
 
 // TODO: Put this in a service
-function parseRsRepresentation(entity) {
-    return JSON.parse(entity);
-}
-
-// TODO: Put this in a service
 function parseSirenEntity(entity, isSubentity, basePath) {
-    isSubentity = typeof (isSubentity) !== "undefined" ? isSubentity : false;
+    isSubentity = isSubentity || false;
 
-    if (isSubentity && typeof (entity.Href) !== "undefined" && entity.Href) {
+    if (isSubentity && typeof (entity.href) !== "undefined" && entity.href) {
         return null;
     } else {
         var classes = entity.Class || [];
@@ -81,20 +76,14 @@ function parseSirenEntity(entity, isSubentity, basePath) {
     }
 }
 
-// monadic bind: used for chaining Finders. Threads the result of each http request through the chain.
-var bind = function(finder, fn) {
-    return new Finder(function (callback) {
-        finder.run(function (doc) {
-            fn(doc).run(callback);
-        });
-    });
-};
-
-function Finder(fn, parseDoc, basePath) {
+// type Finder = HttpContext -> HttpRequest -> HyperMediaDoc
+function Finder(fn, req) {
     var self = this;
-    self.parseDoc = parseDoc;
-    self.basePath = basePath;
+    self.req = req;
+    //self.parseDoc = parseDoc;
+   // self.basePath = basePath;
     self.doc = null; // the document that this Finder object represents.
+    self.includes = [];
     self.waitingStack = []; // a buffer queue to prevent multiple simultaneous requests.
 
     // Wrap the run function to ensure that it's only ever resolved once. This prevents unnecessary http requests. If the request needs to be
@@ -110,6 +99,7 @@ function Finder(fn, parseDoc, basePath) {
             // if document hasn't been fetched yet, get the document and then pass it to all the callbacks in the waiting queue.
             if (self.waitingStack.length === 1) {
                 // get the document.
+                console.log('running: ')
                 fn.call(self, function (doc) {
                     self.doc = doc;
                     // got the document. Now give it to all who are waiting or it.
@@ -123,27 +113,42 @@ function Finder(fn, parseDoc, basePath) {
     };
 }
 
-var _ = require('underscore');
+// monadic bind: used for chaining Finders. Threads the result of each http request through the chain.
+Finder.bind = function(finder, fn) {
+    return new Finder(function (callback) {
+        finder.run(function (doc) {
+            fn(doc).run(callback);
+        });
+    }, finder.req);
+};
 
 Finder.prototype = {
+    include: function (includes) {
+        includes = includes || [];
+        for (var i in includes) {
+            this.includes.push(includes[i]);
+        }
+        return this;
+    },
 
     // A function that follows a link to a sub-entity or a document based on a "rel" attribute.
     // If the sub-entity is embedded in the current document, just return it without doing an http request.
-    to: function (rel) {
-        return bind(this, function (doc) {
+    follow: function (rel) {
+        var self = this;
+        return Finder.bind(this, function (doc) {
             var uri = null;
 
             var links = doc.links || {};
             if (typeof(links[rel]) !== 'undefined') {
               uri = links[rel];
-            } else if (_.isArray(doc.data)) {
+            } else {
+              let children = doc.children || [];
               // search through subentities
-              for (var i = 0; i < doc.data.length; i++) {
-
-                  var child = doc.data[i];
+              for (var i = 0; i < children.length; i++) {
+                  var child = children[i];
                   if (child.rel === rel) {
-                      var data = child.data || [];
-                      if (_.isObject(data)) {
+                      var dataExists = typeof(child.data) !== 'undefined' && child.data !== null;
+                      if (dataExists) {
                         // the subentity is available in memory. Return the resource
                         return new Finder(function (callback) {
                           callback(child);
@@ -152,6 +157,8 @@ Finder.prototype = {
                         // this is a subentity link. Follow it.
                         uri = child.links.self;
                         break;
+                      } else {
+                          // error
                       }
                   }
               }
@@ -161,22 +168,24 @@ Finder.prototype = {
                 var config = {
                     url: uri,
                     method: 'get',
+                    includes: this.includes,
                     headers: { 'Accept': 'application/vnd.siren+json' }
                 };
+
                 // Send a request for the sub-entity/link.
-                req(config, callback);
-            });
+                this.req(config, callback);
+            }, self.req);
         });
     },
 
     // A function that post a form/action on the document. Used for RPC style calls.
     do: function (actionName, params, onprogress) {
-        return bind(this, function (doc) {
+        return Finder.bind(this, function (doc) {
             // find the action based on the actionName param.
             var action = null;
-            for (var i = 0; i < doc.Actions.length; i++) {
-                if (doc.Actions[i].Name === actionName) {
-                    action = doc.Actions[i];
+            for (var i = 0; i < doc.actions.length; i++) {
+                if (doc.actions[i].Name === actionName) {
+                    action = doc.actions[i];
                     break;
                 }
             }
@@ -185,17 +194,17 @@ Finder.prototype = {
             // available, then use the field's default value.
             var actionParams = {};
             var fileParams = {};
-            for (var fieldName in action.Fields) {
-                var field = action.Fields[fieldName];
-                if (field.Type == 2) {
-                    fileParams[fieldName] = typeof params[fieldName] !== 'undefined' ? params[fieldName] : field.Value;
+            for (var fieldName in action.fields) {
+                var field = action.fields[fieldName];
+                if (field.type == 2) {
+                    fileParams[fieldName] = typeof params[fieldName] !== 'undefined' ? params[fieldName] : field.value;
                 } else {
-                    actionParams[fieldName] = typeof params[fieldName] !== 'undefined' ? params[fieldName] : field.Value;
+                    actionParams[fieldName] = typeof params[fieldName] !== 'undefined' ? params[fieldName] : field.value;
                 }
             }
 
             // Parse the form action uri, which may contain a template.
-            var template = parseUri(action.Href);
+            var template = parseUri(action.href);
             // Generate the form action uri from the template, substituting the actionParams for the template placeholders values.
             var uri = expandUri(template, actionParams);
 
@@ -210,7 +219,7 @@ Finder.prototype = {
             return new Finder(function (callback) {
                 var config = {
                     url: uri,
-                    method: action.Method.Method,
+                    method: action.method.method,
                     headers: { 'Accept': 'application/vnd.siren+json' },
                     files: fileParams
                 };
@@ -250,17 +259,18 @@ Finder.prototype = {
 
     delete: function (params) { return this.do('delete', params); },
 
-    map: function (fn) {
-      return bind(this, function (doc) {
-        var result = fn(doc.data);
-        return new Finder(function (callback) {
-          callback({
-            rel: doc.rel,
-            links: doc.links,
-            data: result
-          });
+    map: function (mapFn) {
+        return bind(this, function (doc) {
+            var result = mapFn(doc.data);
+            return new Finder(function (callback) {
+                callback({
+                    rel: doc.rel,
+                    links: doc.links,
+                    data: result,
+                    children: doc.children
+                });
+            });
         });
-      });
     },
 
     // Pull the data out of the document and give it back to the user
@@ -269,7 +279,7 @@ Finder.prototype = {
         self.run(function (doc) {
             //var val = parseRsRepresentation(doc);
             if (callback) {
-                var val = callback(doc.data);
+                var val = callback(doc);
             }
             //self.deferred.resolve(val);
         });
@@ -278,27 +288,48 @@ Finder.prototype = {
         return self;
     },
 
+    // Pull the data out of the document and give it back to the user
+    resolveData: function (callback) {
+        return this.resolve(function (doc){
+            callback(doc.data);
+        });
+    },
+
+    // Pull the properties out of the document and give it back to the user
+    resolveProps: function (callback) {
+        return this.resolve(function (doc){
+            callback(doc.props);
+        });
+    },
+
+    // Pull the properties out of the document and give it back to the user
+    resolveChildren: function (callback) {
+        return this.resolve(function (doc){
+            callback(doc.children);
+        });
+    }
+
     //then: function(callback,errback) {
     //    return this.deferred.promise.then(callback, errback);
     //}
 };
 
-exports.Client = function(basePath) {
-  return {
-      // Gets dereferences a uri and wraps the resource in a Finder
-      from: function (uri) {
-          return new Finder(function (callback) {
-              var config = {
-                  url: uri,
-                  method: "get",
-                  headers: { 'Accept': 'application/vnd.siren+json' },
-              };
-
-              req(config, callback);
-          }, parseRsRepresentation);
-      },
-      to: function (rel) {
-          return this.from(apiRoot).to(rel);
-      }
+exports.HypermediaClient = function(req) {
+    return {
+        // Gets dereferences a uri and wraps the resource in a Finder
+        from: function (uri) {
+            return new Finder(function (callback) {
+                var config = {
+                    url: uri,
+                    method: "get",
+                    includes: this.includes,
+                    headers: { 'Accept': 'application/vnd.siren+json' },
+                };
+                this.req(config, callback);
+            }, req);
+        },
+        follow: function (rel) {
+            return this.from(apiRoot).follow(rel);
+        }
   };
 }
