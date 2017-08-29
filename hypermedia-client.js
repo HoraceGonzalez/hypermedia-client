@@ -85,25 +85,29 @@ function HypermediaQuery(fn, req) {
 
     // Wrap the run function to ensure that it's only ever resolved once. This prevents unnecessary http requests. If the request needs to be
     // done a second time, the user should create a new HypermediaQuery.
-    self.run = function (callback) {
+    self.run = function (onError,onSuccess) {
         if (self.doc) {
             // document has already been fetched. Just return it to the callback;
-            callback(self.doc);
+            onSuccess(self.doc);
         } else {
             // enqueue this request
-            self.waitingStack.unshift(callback);
+            self.waitingStack.unshift(onSuccess);
 
             // if document hasn't been fetched yet, get the document and then pass it to all the callbacks in the waiting queue.
             if (self.waitingStack.length === 1) {
                 // get the document.
-                fn.call(self, function (doc) {
-                    self.doc = doc;
-                    // got the document. Now give it to all who are waiting or it.
-                    while (self.waitingStack.length > 0) {
-                        var callback = self.waitingStack.pop();
-                        callback(doc);
-                    }
-                });
+                try {
+                    fn.call(self, onError, function (doc) {
+                        self.doc = doc;
+                        // got the document. Now give it to all who are waiting or it.
+                        while (self.waitingStack.length > 0) {
+                            var callback = self.waitingStack.pop();
+                            callback(doc);
+                        }
+                    });
+                } catch (exn) {
+                    onError(exn);
+                }
             }
         }
     };
@@ -111,20 +115,34 @@ function HypermediaQuery(fn, req) {
 
 // monadic bind: used for chaining HypermediaQueries. Threads the result of each http request through the chain.
 HypermediaQuery.bind = function(query, fn) {
-    return new HypermediaQuery(function (callback) {
-        query.run(function (doc) {
-            fn(doc).run(callback);
+    return new HypermediaQuery(function (onError,onSuccess) {
+        query.run(onError, function (doc) {
+            var mappedResult = null;
+            try {
+                fn(doc).run(onError, onSuccess);
+            } catch (exn) {
+                onError(exn);
+            }
         });
     }, query.req);
 };
 
 HypermediaQuery.prototype = {
     include: function (includes) {
-        includes = includes || [];
+        var includes = includes || [];
         for (var i in includes) {
             this.includes.push(includes[i]);
         }
         return this;
+        // var self = this;
+        // return new HypermediaQuery(function (onError,onSuccess) {
+        //     var _includes = includes || [];
+        //     for (var i in _includes) {
+        //         this.includes.push(_includes[i]);
+        //     }
+
+        //     self.run(onError,onSuccess);
+        // }, this.req);
     },
 
     // A function that follows a link to a sub-entity or a document based on a "rel" attribute.
@@ -136,40 +154,40 @@ HypermediaQuery.prototype = {
 
             var links = doc.links || {};
             if (typeof(links[rel]) !== 'undefined') {
-              uri = links[rel];
+                uri = links[rel];
             } else {
-              let children = doc.children || [];
-              // search through subentities
-              for (var i = 0; i < children.length; i++) {
-                  var child = children[i];
-                  if (child.rel === rel) {
-                      var dataExists = typeof(child.data) !== 'undefined' && child.data !== null;
-                      if (dataExists) {
-                        // the subentity is available in memory. Return the resource
-                        return new HypermediaQuery(function (callback) {
-                          callback(child);
-                        });
-                      } else if (child.links.self) {
-                        // this is a subentity link. Follow it.
-                        uri = child.links.self;
-                        break;
-                      } else {
-                          // error
-                      }
-                  }
-              }
+                let children = doc.children || [];
+                // search through subentities
+                for (var i = 0; i < children.length; i++) {
+                    var child = children[i];
+                    if (child.rel === rel) {
+                        var dataExists = typeof(child.data) !== 'undefined' && child.data !== null;
+                        if (dataExists) {
+                            // the subentity is available in memory. Return the resource
+                            return new HypermediaQuery(function (onError,onSuccess) {
+                                onSuccess(child);
+                            }, self.req);
+                        } else if (child.links.self) {
+                            // this is a subentity link. Follow it.
+                            uri = child.links.self;
+                            break;
+                        }
+                    }
+                }
             }
 
-            return new HypermediaQuery(function (callback) {
-                var config = {
-                    url: uri,
-                    method: 'get',
-                    includes: this.includes,
-                    headers: { 'Accept': 'application/vnd.siren+json' }
-                };
-
-                // Send a request for the sub-entity/link.
-                this.req(config, callback);
+            return new HypermediaQuery(function (onError,onSuccess) {
+                if (uri === null) {
+                    onError("no such rel");
+                } else {
+                    // Send a request for the sub-entity/link.
+                    this.req({
+                        url: uri,
+                        method: 'get',
+                        includes: this.includes,
+                        headers: { 'Accept': 'application/vnd.siren+json' }
+                    }, onError, onSuccess);
+                }
             }, self.req);
         });
     },
@@ -181,19 +199,23 @@ HypermediaQuery.prototype = {
             // find the form based on the formName param.
             var forms = doc.forms || {};
             var form = forms[formName];
-
+            var formInputs = form.inputs || [];
             // Enumerate the fields from the form and sets the value from the supplied "params". If the param isn't
             // available, then use the field's default value.
             var formParams = {};
             var fileParams = {};
-            // for (var i in form.inputs) {
-            //     var field = form.inputs[i];
-            //     if (field.type == 2) {
-            //         fileParams[fieldName] = typeof params[fieldName] !== 'undefined' ? params[fieldName] : field.value;
-            //     } else {
-            //         formParams[fieldName] = typeof params[fieldName] !== 'undefined' ? params[fieldName] : field.value;
-            //     }
-            // }
+            for (var i in formInputs) {
+                var field = formInputs[i];
+                if (field.type == 'file') {
+                    fileParams[field.name] = typeof params[field.name] !== 'undefined' 
+                        ? params[field.name] 
+                        : field.value;
+                } else {
+                    formParams[field.name] = typeof params[field.name] !== 'undefined' 
+                        ? params[field.name] 
+                        : field.value;
+                }
+            }
 
             // Parse the form furl uri, which may contain a template.
             var template = parseUri(form.action);
@@ -208,8 +230,8 @@ HypermediaQuery.prototype = {
                 }
             }
 
-            return new HypermediaQuery(function (callback) {
-                var config = {
+            return new HypermediaQuery(function (onError,onSuccess) {
+                var requestParams = {
                     url: uri,
                     method: form.method,
                     headers: { 'Accept': 'application/vnd.siren+json' },
@@ -223,26 +245,27 @@ HypermediaQuery.prototype = {
                     break;
                 }
 
-                // Set the config data/params property depending on whether this is a get/delete or a post/put.
-                config[isGetorDelete.test(config.method) ? "params" : "data"] = hasProps ? formParams : undefined;
+                // Set the requestParams data/params property depending on whether this is a get/delete or a post/put.
+                requestParams[isGetorDelete.test(requestParams.method) ? "params" : "data"] = hasProps ? formParams : undefined;
 
                 var hasFiles = false;
-                for (var prop in config.files) {
+                for (var prop in requestParams.files) {
                     hasFiles = true;
                     break;
                 }
 
                 if (hasFiles) {
-                    file.httpMultipart(config, onprogress).then(callback, function (e) {
+                    file.httpMultipart(requestParams, onprogress).then(onSuccess, function (e) {
                         // something nasty happened;
                     });
                 } else {
-                    this.req(config, callback);
+                    this.req(requestParams, onError, onSuccess);
                 }
             }, self.req);
         });
     },
 
+    // BEGIN: CRUD Actions
     insert: function (params) { return this.do('insert', params); },
 
     get: function (params) { return this.do('get', params); },
@@ -250,15 +273,18 @@ HypermediaQuery.prototype = {
     update: function (params) { return this.do('update', params); },
 
     delete: function (params) { return this.do('delete', params); },
+    // END: CRUD Actions
 
+    // maps a HyperMedia document's "data" to a different shape
     map: function (mapFn) {
-        return bind(this, function (doc) {
-            var result = mapFn(doc.data);
-            return new HypermediaQuery(function (callback) {
-                callback({
+        return HyperMediaQuery.bind(this, function (doc) {
+            return new HypermediaQuery(function (onError, onSuccess) {
+                onSuccess({
                     rel: doc.rel,
                     links: doc.links,
-                    data: result,
+                    forms: doc.forms,
+                    props: doc.props,
+                    data: mapFn(doc.data),
                     children: doc.children
                 });
             });
@@ -266,12 +292,14 @@ HypermediaQuery.prototype = {
     },
 
     // Pull the data out of the document and give it back to the user
-    resolve: function (callback) {
+    resolve: function (onError,onSuccess) {
         var self = this;
-        self.run(function (doc) {
+        self.run(function(err) {
+            onError(err);
+        }, function (doc) {
             //var val = parseRsRepresentation(doc);
-            if (callback) {
-                var val = callback(doc);
+            if (onSuccess) {
+                var val = onSuccess(doc);
             }
             //self.deferred.resolve(val);
         });
@@ -281,23 +309,23 @@ HypermediaQuery.prototype = {
     },
 
     // Pull the data out of the document and give it back to the user
-    resolveData: function (callback) {
-        return this.resolve(function (doc){
-            callback(doc.data);
+    resolveData: function (onError,onSuccess) {
+        return this.resolve(onError, function (doc){
+            onSuccess(doc.data);
         });
     },
 
     // Pull the properties out of the document and give it back to the user
-    resolveProps: function (callback) {
-        return this.resolve(function (doc){
-            callback(doc.props);
+    resolveProps: function (onError,onSuccess) {
+        return this.resolve(onError, function (doc){
+            onSuccess(doc.props);
         });
     },
 
     // Pull the properties out of the document and give it back to the user
-    resolveChildren: function (callback) {
-        return this.resolve(function (doc){
-            callback(doc.children);
+    resolveChildren: function (onError,onSuccess) {
+        return this.resolve(onError, function (doc){
+            onSuccess(doc.children);
         });
     }
 
@@ -310,15 +338,24 @@ exports.HypermediaClient = function(req) {
     return {
         // Gets dereferences a uri and creates a new HypermediaQuery
         from: function (uri) {
-            return new HypermediaQuery(function (callback) {
-                var config = {
+            var protectedRequest = function (requestParams, onError, onSuccess) {
+                req(requestParams, onError, function (res) {
+                    if (res.success) {
+                        onSuccess(res);
+                    } else {
+                        onError(res.error);
+                    }
+                })
+            };
+
+            return new HypermediaQuery(function (onError,onSuccess) {
+                this.req({
                     url: uri,
-                    method: "get",
+                    method: 'get',
                     includes: this.includes,
                     headers: { 'Accept': 'application/vnd.siren+json' },
-                };
-                this.req(config, callback);
-            }, req);
+                }, onError, onSuccess);
+            }, protectedRequest);
         },
         follow: function (rel) {
             return this.from(apiRoot).follow(rel);

@@ -1,12 +1,12 @@
 var saRequest = require('superagent');
-var hypermedia = require('./ResourceFinder.js');
+var hypermedia = require('./hypermedia-client.js');
 
 function superAgentHttpRequestFactory (settings) {
     var baseUrl = settings.baseUrl || "";
     baseUrl = baseUrl.endsWith ("/")
         ? baseUrl
         : baseUrl + "/"    
-    return function _request(reqParams, cb) {
+    return function _request(reqParams, onError, onSuccess) {
         console.log(reqParams.method + ' ' + reqParams.url);
         var path = reqParams.url || "";
         var url = path.startsWith("http://") || path.startsWith("https://")
@@ -26,10 +26,11 @@ function superAgentHttpRequestFactory (settings) {
         }
             
         req.end(function(err,res){
-            if (err) {
-                console.log('error:' + err);
+            if (err || !res.ok) {
+                onError(err);
+            } else {
+                onSuccess(res.body);
             }
-            cb(res.body);
         });
     };
 }
@@ -39,25 +40,29 @@ let client = new hypermedia.HypermediaClient(superAgentHttpRequestFactory({
     sessionToken: ""
 }));
 
+function printError(msg) {
+    console.error(msg);
+}
+
 var offering = client
     .from("query/offering?offering_id=4201408783290348")
-    //.include(["order-info"]);
+    .include(["order-info"]);
 
-// offering.resolveData (function(offering) {
-//     console.log(offering);
-// });
+offering.resolveData (printError, function(offering) {
+    console.log(offering);
+});
 
 // var offeringPhotos = offering.follow("offering-photos");
 // var offeringTabs = offering.follow("offering-tabs");
 // var orderInfo = offering.follow("order-info");
 
-// offeringPhotos.resolveData(function (photos) {
+// offeringPhotos.resolveData(printError, function (photos) {
 //     for (var i in photos) {
 //         console.log ("photos[" + i + "].url = " + photos[i].url);
 //     }
 // });
 
-// offeringTabs.resolveData (function(data) {
+// offeringTabs.resolveData (printError, function(data) {
 //     var cards = data.cards;
 //     for (var i in cards) {
 //         console.log ("cards[" + i + "].title = " + cards[i].title);
@@ -69,6 +74,6 @@ var offering = client
 //     console.log(orderInfo);
 // });
 
-// orderInfo.do("add-to-waitlist").resolveData(function (message) {
-//     console.log(message);
-// })
+orderInfo.do("add-to-waitlist").resolveData(printError, function (message) {
+    console.log(message);
+});
