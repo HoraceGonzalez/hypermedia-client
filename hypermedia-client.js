@@ -76,18 +76,15 @@ function parseSirenEntity(entity, isSubentity, basePath) {
     }
 }
 
-// type Finder = HttpContext -> HttpRequest -> HyperMediaDoc
-function Finder(fn, req) {
+function HypermediaQuery(fn, req) {
     var self = this;
     self.req = req;
-    //self.parseDoc = parseDoc;
-   // self.basePath = basePath;
-    self.doc = null; // the document that this Finder object represents.
+    self.doc = null; // the document that this HypermediaQuery object represents.
     self.includes = [];
     self.waitingStack = []; // a buffer queue to prevent multiple simultaneous requests.
 
     // Wrap the run function to ensure that it's only ever resolved once. This prevents unnecessary http requests. If the request needs to be
-    // done a second time, the user should create a new Finder.
+    // done a second time, the user should create a new HypermediaQuery.
     self.run = function (callback) {
         if (self.doc) {
             // document has already been fetched. Just return it to the callback;
@@ -112,16 +109,16 @@ function Finder(fn, req) {
     };
 }
 
-// monadic bind: used for chaining Finders. Threads the result of each http request through the chain.
-Finder.bind = function(finder, fn) {
-    return new Finder(function (callback) {
-        finder.run(function (doc) {
+// monadic bind: used for chaining HypermediaQueries. Threads the result of each http request through the chain.
+HypermediaQuery.bind = function(query, fn) {
+    return new HypermediaQuery(function (callback) {
+        query.run(function (doc) {
             fn(doc).run(callback);
         });
-    }, finder.req);
+    }, query.req);
 };
 
-Finder.prototype = {
+HypermediaQuery.prototype = {
     include: function (includes) {
         includes = includes || [];
         for (var i in includes) {
@@ -134,7 +131,7 @@ Finder.prototype = {
     // If the sub-entity is embedded in the current document, just return it without doing an http request.
     follow: function (rel) {
         var self = this;
-        return Finder.bind(this, function (doc) {
+        return HypermediaQuery.bind(this, function (doc) {
             var uri = null;
 
             var links = doc.links || {};
@@ -149,7 +146,7 @@ Finder.prototype = {
                       var dataExists = typeof(child.data) !== 'undefined' && child.data !== null;
                       if (dataExists) {
                         // the subentity is available in memory. Return the resource
-                        return new Finder(function (callback) {
+                        return new HypermediaQuery(function (callback) {
                           callback(child);
                         });
                       } else if (child.links.self) {
@@ -163,7 +160,7 @@ Finder.prototype = {
               }
             }
 
-            return new Finder(function (callback) {
+            return new HypermediaQuery(function (callback) {
                 var config = {
                     url: uri,
                     method: 'get',
@@ -180,7 +177,7 @@ Finder.prototype = {
     // A function that post a form on the document. Used for RPC style calls.
     do: function (formName, params, onprogress) {
         var self = this;
-        return Finder.bind(this, function (doc) {
+        return HypermediaQuery.bind(this, function (doc) {
             // find the form based on the formName param.
             var forms = doc.forms || {};
             var form = forms[formName];
@@ -211,7 +208,7 @@ Finder.prototype = {
                 }
             }
 
-            return new Finder(function (callback) {
+            return new HypermediaQuery(function (callback) {
                 var config = {
                     url: uri,
                     method: form.method,
@@ -257,7 +254,7 @@ Finder.prototype = {
     map: function (mapFn) {
         return bind(this, function (doc) {
             var result = mapFn(doc.data);
-            return new Finder(function (callback) {
+            return new HypermediaQuery(function (callback) {
                 callback({
                     rel: doc.rel,
                     links: doc.links,
@@ -279,7 +276,7 @@ Finder.prototype = {
             //self.deferred.resolve(val);
         });
 
-        // send back this Finder just incase users want to hold onto it.
+        // send back this HypermediaQuery just incase users want to hold onto it.
         return self;
     },
 
@@ -311,9 +308,9 @@ Finder.prototype = {
 
 exports.HypermediaClient = function(req) {
     return {
-        // Gets dereferences a uri and wraps the resource in a Finder
+        // Gets dereferences a uri and creates a new HypermediaQuery
         from: function (uri) {
-            return new Finder(function (callback) {
+            return new HypermediaQuery(function (callback) {
                 var config = {
                     url: uri,
                     method: "get",
